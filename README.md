@@ -4,6 +4,11 @@ Python controller for the ROBOTIS RH-P12-RN and RH-P12-RN(A) grippers.
 
 ## Installation
 
+This package can be installed via pip:
+```bash
+pip install git+https://github.com/TimSchneider42/python-rhp12rn-controller.git
+```
+
 ## Usage
 
 First, create a `RHP12RNConnector` or `RHP12RNAConnector` instance depending on your gripper model and call the `connect()` function to establish a serial connection to the gripper:
