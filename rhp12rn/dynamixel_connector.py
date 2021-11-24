@@ -21,14 +21,17 @@ class DynamixelConnector:
     def connect(self):
         assert not self.connected, "Already connected."
         self.__port_handler = PortHandler(self.__device)
+        try:
+            if not self.__port_handler.openPort():
+                self.__port_handler = None
+                raise ValueError("Failed to open port.")
 
-        if not self.__port_handler.openPort():
+            if not self.__port_handler.setBaudRate(self.__baud_rate):
+                self.disconnect()
+                raise ValueError("Failed to set baud rate.")
+        except:
             self.__port_handler = None
-            raise ValueError("Failed to open port.")
-
-        if not self.__port_handler.setBaudRate(self.__baud_rate):
-            self.disconnect()
-            raise ValueError("Failed to set baud rate.")
+            raise
 
     def disconnect(self):
         if self.connected:
