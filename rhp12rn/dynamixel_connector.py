@@ -59,9 +59,11 @@ class FieldReadFuture(DynamixelFuture):
 
     def _read(self):
         self.__read = True
+        self._port_handler.setPacketTimeoutMillis(100000)
+        # This effectively disables the timeout (might cause problems since the loss of packages will not be noticed)
+        # TODO: properly implement bulk reading
         data_raw, self.__comm_result, self.__error = self._packet_handler.readRx(
             self._port_handler, self._connector.dynamixel_id, struct.calcsize(self.__field.data_type))
-
         if self.__comm_result == 0 and self.__error == 0:
             self.__data = struct.unpack("<{}".format(self.__field.data_type), bytes(data_raw))[0]
 
@@ -87,6 +89,7 @@ class FieldWriteFuture(DynamixelFuture):
 
     def _read(self):
         self.__read = True
+        self._port_handler.setPacketTimeoutMillis(100000)
         while True:
             rxpacket, result = self._packet_handler.rxPacket(self._port_handler)
             if result != COMM_SUCCESS or self._connector.dynamixel_id == rxpacket[PKT_ID]:
@@ -154,6 +157,7 @@ class DynamixelConnector:
         field = self.__field_dict[field_name]
         comm_result = self.__packet_handler.readTx(
             self.__port_handler, self.__dynamixel_id, field.address, struct.calcsize(field.data_type))
+        self.__port_handler.is_using = False
         if comm_result != 0:
             raise ValueError(
                 "Encountered communication error during reading (tx): {}".format(
@@ -170,7 +174,7 @@ class DynamixelConnector:
 
         comm_result = self.__packet_handler.writeTxOnly(
             self.__port_handler, self.__dynamixel_id, field.address, len(data), data)
-        self.__port_handler.setPacketTimeout(11)
+        self.__port_handler.is_using = False
         if comm_result != 0:
             raise ValueError(
                 "Encountered communication error during writing: {}".format(
