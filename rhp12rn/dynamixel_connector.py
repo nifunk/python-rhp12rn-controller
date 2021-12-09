@@ -23,13 +23,92 @@ SOFTWARE.
 """
 
 import struct
+from abc import abstractmethod
+from queue import Queue
 from typing import Optional, NamedTuple, Dict, Sequence
 
-from dynamixel_sdk import PortHandler, PacketHandler
+from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS, PKT_ID, PKT_ERROR, DXL_LOBYTE, DXL_HIBYTE
 
 Field = NamedTuple("Field", (
     ("address", int), ("data_type", str), ("name", str), ("desc", str), ("writable", bool),
     ("initial_value", Optional[int])))
+
+
+class DynamixelFuture:
+    def __init__(self, connector: "DynamixelConnector", packet_handler: PacketHandler, port_handler: PortHandler):
+        self._connector = connector
+        self._packet_handler = packet_handler
+        self._port_handler = port_handler
+
+    @abstractmethod
+    def _read(self):
+        pass
+
+    @abstractmethod
+    def result(self):
+        pass
+
+
+class FieldReadFuture(DynamixelFuture):
+    def __init__(self, field: Field, connector: "DynamixelConnector", packet_handler: PacketHandler,
+                 port_handler: PortHandler):
+        super(FieldReadFuture, self).__init__(connector, packet_handler, port_handler)
+        self.__field = field
+        self.__data = self.__comm_result = self.__error = None
+        self.__read = False
+
+    def _read(self):
+        self.__read = True
+        data_raw, self.__comm_result, self.__error = self._packet_handler.readRx(
+            self._port_handler, self._connector.dynamixel_id, struct.calcsize(self.__field.data_type))
+
+        if self.__comm_result == 0 and self.__error == 0:
+            self.__data = struct.unpack("<{}".format(self.__field.data_type), bytes(data_raw))[0]
+
+    def result(self):
+        if not self.__read:
+            self._connector.process_futures(stop_on=self)
+        if self.__comm_result != 0:
+            raise ValueError(
+                "Encountered communication error during reading (rx): {}".format(
+                    self._packet_handler.getTxRxResult(self.__comm_result)))
+        elif self.__error != 0:
+            raise ValueError(
+                "Encountered packet error during reading: {}".format(
+                    self._packet_handler.getRxPacketError(self.__error)))
+        return self.__data
+
+
+class FieldWriteFuture(DynamixelFuture):
+    def __init__(self, connector: "DynamixelConnector", packet_handler: PacketHandler, port_handler: PortHandler):
+        super(FieldWriteFuture, self).__init__(connector, packet_handler, port_handler)
+        self.__comm_result = self.__error = None
+        self.__read = False
+
+    def _read(self):
+        self.__read = True
+        while True:
+            rxpacket, result = self._packet_handler.rxPacket(self._port_handler)
+            if result != COMM_SUCCESS or self._connector.dynamixel_id == rxpacket[PKT_ID]:
+                break
+
+        self.__comm_result = result
+        if result == COMM_SUCCESS:
+            self.__error = rxpacket[PKT_ERROR]
+        else:
+            self.__error = 0
+
+    def result(self):
+        if not self.__read:
+            self._connector.process_futures(stop_on=self)
+        if self.__comm_result != 0:
+            raise ValueError(
+                "Encountered communication error during writing: {}".format(
+                    self._packet_handler.getTxRxResult(self.__comm_result)))
+        elif self.__error != 0:
+            raise ValueError(
+                "Encountered packet error during writing: {}".format(
+                    self._packet_handler.getRxPacketError(self.__error)))
 
 
 class DynamixelConnector:
@@ -41,6 +120,7 @@ class DynamixelConnector:
         self.__port_handler: Optional[PortHandler] = None
         self.__packet_handler = PacketHandler(2.0)
         self.__field_dict = {f.name: f for f in fields}
+        self.__future_queue = Queue()
 
     def connect(self):
         assert not self.connected, "Already connected."
@@ -69,36 +149,48 @@ class DynamixelConnector:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
 
-    def read_field(self, field_name: str):
+    def read_field_async(self, field_name: str):
         assert self.connected, "Controller is not connected."
         field = self.__field_dict[field_name]
-        data_raw, comm_result, error = self.__packet_handler.readTxRx(
+        comm_result = self.__packet_handler.readTx(
             self.__port_handler, self.__dynamixel_id, field.address, struct.calcsize(field.data_type))
         if comm_result != 0:
             raise ValueError(
-                "Encountered communication error during reading: {}".format(
+                "Encountered communication error during reading (tx): {}".format(
                     self.__packet_handler.getTxRxResult(comm_result)))
-        elif error != 0:
-            raise ValueError(
-                "Encountered packet error during reading: {}".format(self.__packet_handler.getRxPacketError(error)))
+        future = FieldReadFuture(field, self, self.__packet_handler, self.__port_handler)
+        self.__future_queue.put(future)
+        return future
 
-        return struct.unpack("<{}".format(field.data_type), bytes(data_raw))[0]
-
-    def write_field(self, field_name: str, value: int):
+    def write_field_async(self, field_name: str, value: int):
         assert self.connected, "Controller is not connected."
         field = self.__field_dict[field_name]
 
         data = list(struct.pack("<{}".format(field.data_type), value))
 
-        comm_result, error = self.__packet_handler.writeTxRx(
+        comm_result = self.__packet_handler.writeTxOnly(
             self.__port_handler, self.__dynamixel_id, field.address, len(data), data)
+        self.__port_handler.setPacketTimeout(11)
         if comm_result != 0:
             raise ValueError(
                 "Encountered communication error during writing: {}".format(
                     self.__packet_handler.getTxRxResult(comm_result)))
-        elif error != 0:
-            raise ValueError(
-                "Encountered packet error during writing: {}".format(self.__packet_handler.getRxPacketError(error)))
+        future = FieldWriteFuture(self, self.__packet_handler, self.__port_handler)
+        self.__future_queue.put(future)
+        return future
+
+    def read_field(self, field_name: str):
+        return self.read_field_async(field_name).result()
+
+    def write_field(self, field_name: str, value: int):
+        return self.write_field_async(field_name, value).result()
+
+    def process_futures(self, stop_on: Optional[DynamixelFuture] = None):
+        while not self.__future_queue.empty():
+            future = self.__future_queue.get()
+            future._read()
+            if future == stop_on:
+                break
 
     @property
     def connected(self):
@@ -107,3 +199,7 @@ class DynamixelConnector:
     @property
     def fields(self) -> Dict[str, Field]:
         return self.__field_dict
+
+    @property
+    def dynamixel_id(self) -> int:
+        return self.__dynamixel_id
