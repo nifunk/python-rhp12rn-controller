@@ -23,15 +23,19 @@ SOFTWARE.
 """
 
 import struct
+import time
 from abc import abstractmethod
 from queue import Queue
 from typing import Optional, NamedTuple, Dict, Sequence
 
-from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS, PKT_ID, PKT_ERROR, DXL_LOBYTE, DXL_HIBYTE
+from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS, PKT_ID, PKT_ERROR
 
 Field = NamedTuple("Field", (
     ("address", int), ("data_type", str), ("name", str), ("desc", str), ("writable", bool),
     ("initial_value", Optional[int])))
+
+
+# TODO: properly implement bulk reading
 
 
 class DynamixelFuture:
@@ -59,9 +63,7 @@ class FieldReadFuture(DynamixelFuture):
 
     def _read(self):
         self.__read = True
-        self._port_handler.setPacketTimeoutMillis(100000)
-        # This effectively disables the timeout (might cause problems since the loss of packages will not be noticed)
-        # TODO: properly implement bulk reading
+        self._port_handler.setPacketTimeoutMillis(100)
         data_raw, self.__comm_result, self.__error = self._packet_handler.readRx(
             self._port_handler, self._connector.dynamixel_id, struct.calcsize(self.__field.data_type))
         if self.__comm_result == 0 and self.__error == 0:
@@ -89,7 +91,7 @@ class FieldWriteFuture(DynamixelFuture):
 
     def _read(self):
         self.__read = True
-        self._port_handler.setPacketTimeoutMillis(100000)
+        self._port_handler.setPacketTimeoutMillis(100)
         while True:
             rxpacket, result = self._packet_handler.rxPacket(self._port_handler)
             if result != COMM_SUCCESS or self._connector.dynamixel_id == rxpacket[PKT_ID]:
@@ -124,6 +126,8 @@ class DynamixelConnector:
         self.__packet_handler = PacketHandler(2.0)
         self.__field_dict = {f.name: f for f in fields}
         self.__future_queue = Queue()
+        self.__last_tx = 0
+        self.__tx_wait_time = 0.001
 
     def connect(self):
         assert not self.connected, "Already connected."
@@ -155,8 +159,12 @@ class DynamixelConnector:
     def read_field_async(self, field_name: str):
         assert self.connected, "Controller is not connected."
         field = self.__field_dict[field_name]
+        # Not waiting between two transmissions causes the controller to not reply
+        now = time.time()
+        time.sleep(max(0.0, self.__tx_wait_time - (now - self.__last_tx)))
         comm_result = self.__packet_handler.readTx(
             self.__port_handler, self.__dynamixel_id, field.address, struct.calcsize(field.data_type))
+        self.__last_tx = time.time()
         self.__port_handler.is_using = False
         if comm_result != 0:
             raise ValueError(
@@ -169,11 +177,13 @@ class DynamixelConnector:
     def write_field_async(self, field_name: str, value: int):
         assert self.connected, "Controller is not connected."
         field = self.__field_dict[field_name]
-
         data = list(struct.pack("<{}".format(field.data_type), value))
-
+        # Not waiting between two transmissions causes the controller to not reply
+        now = time.time()
+        time.sleep(max(0.0, self.__tx_wait_time - (now - self.__last_tx)))
         comm_result = self.__packet_handler.writeTxOnly(
             self.__port_handler, self.__dynamixel_id, field.address, len(data), data)
+        self.__last_tx = time.time()
         self.__port_handler.is_using = False
         if comm_result != 0:
             raise ValueError(
