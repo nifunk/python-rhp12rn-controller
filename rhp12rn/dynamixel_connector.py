@@ -37,6 +37,35 @@ Field = NamedTuple("Field", (
 
 # TODO: properly implement bulk reading
 
+class DynamixelError(Exception):
+    pass
+
+
+class DynamixelConnectionError(DynamixelError):
+    pass
+
+
+class DynamixelCommunicationError(DynamixelError):
+    def __init__(self, communication_result: int, packet_handler: PacketHandler, action: str):
+        self.__communication_result = communication_result
+        super(DynamixelCommunicationError, self).__init__("Encountered communication error during {}: {}".format(
+            packet_handler.getTxRxResult(self.__communication_result), action))
+
+    @property
+    def communication_result(self) -> int:
+        return self.__communication_result
+
+
+class DynamixelPacketError(DynamixelError):
+    def __init__(self, error_code: int, packet_handler: PacketHandler, action: str):
+        self.__error_code = error_code
+        super(DynamixelPacketError, self).__init__("Encountered packet error during {}: {}".format(
+            packet_handler.getRxPacketError(self.__error_code), action))
+
+    @property
+    def error_code(self) -> int:
+        return self.__error_code
+
 
 class DynamixelFuture:
     def __init__(self, connector: "DynamixelConnector", packet_handler: PacketHandler, port_handler: PortHandler):
@@ -73,13 +102,9 @@ class FieldReadFuture(DynamixelFuture):
         if not self.__read:
             self._connector.process_futures(stop_on=self)
         if self.__comm_result != 0:
-            raise ValueError(
-                "Encountered communication error during reading (rx): {}".format(
-                    self._packet_handler.getTxRxResult(self.__comm_result)))
+            raise DynamixelCommunicationError(self.__comm_result, self._packet_handler, "reading")
         elif self.__error != 0:
-            raise ValueError(
-                "Encountered packet error during reading: {}".format(
-                    self._packet_handler.getRxPacketError(self.__error)))
+            raise DynamixelPacketError(self.__error, self._packet_handler, "reading")
         return self.__data
 
 
@@ -107,13 +132,9 @@ class FieldWriteFuture(DynamixelFuture):
         if not self.__read:
             self._connector.process_futures(stop_on=self)
         if self.__comm_result != 0:
-            raise ValueError(
-                "Encountered communication error during writing: {}".format(
-                    self._packet_handler.getTxRxResult(self.__comm_result)))
+            raise DynamixelCommunicationError(self.__comm_result, self._packet_handler, "writing")
         elif self.__error != 0:
-            raise ValueError(
-                "Encountered packet error during writing: {}".format(
-                    self._packet_handler.getRxPacketError(self.__error)))
+            raise DynamixelPacketError(self.__error, self._packet_handler, "writing")
 
 
 class DynamixelConnector:
@@ -130,19 +151,19 @@ class DynamixelConnector:
         self.__tx_wait_time = 0.001
 
     def connect(self):
-        assert not self.connected, "Already connected."
-        self.__port_handler = PortHandler(self.__device)
-        try:
-            if not self.__port_handler.openPort():
-                self.__port_handler = None
-                raise ValueError("Failed to open port.")
+        if not self.connected:
+            self.__port_handler = PortHandler(self.__device)
+            try:
+                if not self.__port_handler.openPort():
+                    self.__port_handler = None
+                    raise DynamixelConnectionError("Failed to open port.")
 
-            if not self.__port_handler.setBaudRate(self.__baud_rate):
-                self.disconnect()
-                raise ValueError("Failed to set baud rate.")
-        except:
-            self.__port_handler = None
-            raise
+                if not self.__port_handler.setBaudRate(self.__baud_rate):
+                    self.disconnect()
+                    raise DynamixelConnectionError("Failed to set baud rate.")
+            except Exception as e:
+                self.__port_handler = None
+                raise
 
     def disconnect(self):
         if self.connected:
@@ -157,7 +178,8 @@ class DynamixelConnector:
         self.disconnect()
 
     def read_field_async(self, field_name: str):
-        assert self.connected, "Controller is not connected."
+        if not self.connected:
+            raise DynamixelError("Controller is not connected.")
         field = self.__field_dict[field_name]
         # Not waiting between two transmissions causes the controller to not reply
         now = time.time()
@@ -167,15 +189,14 @@ class DynamixelConnector:
         self.__last_tx = time.time()
         self.__port_handler.is_using = False
         if comm_result != 0:
-            raise ValueError(
-                "Encountered communication error during reading (tx): {}".format(
-                    self.__packet_handler.getTxRxResult(comm_result)))
+            raise DynamixelCommunicationError(comm_result, self.__packet_handler, "reading")
         future = FieldReadFuture(field, self, self.__packet_handler, self.__port_handler)
         self.__future_queue.put(future)
         return future
 
     def write_field_async(self, field_name: str, value: int):
-        assert self.connected, "Controller is not connected."
+        if not self.connected:
+            raise DynamixelError("Controller is not connected.")
         field = self.__field_dict[field_name]
         data = list(struct.pack("<{}".format(field.data_type), value))
         # Not waiting between two transmissions causes the controller to not reply
@@ -186,9 +207,7 @@ class DynamixelConnector:
         self.__last_tx = time.time()
         self.__port_handler.is_using = False
         if comm_result != 0:
-            raise ValueError(
-                "Encountered communication error during writing: {}".format(
-                    self.__packet_handler.getTxRxResult(comm_result)))
+            raise DynamixelCommunicationError(comm_result, self.__packet_handler, "writing")
         future = FieldWriteFuture(self, self.__packet_handler, self.__port_handler)
         self.__future_queue.put(future)
         return future
