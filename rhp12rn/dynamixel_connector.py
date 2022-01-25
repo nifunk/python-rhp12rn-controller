@@ -49,7 +49,7 @@ class DynamixelCommunicationError(DynamixelError):
     def __init__(self, communication_result: int, packet_handler: PacketHandler, action: str):
         self.__communication_result = communication_result
         super(DynamixelCommunicationError, self).__init__("Encountered communication error during {}: {}".format(
-            packet_handler.getTxRxResult(self.__communication_result), action))
+            action, packet_handler.getTxRxResult(self.__communication_result)))
 
     @property
     def communication_result(self) -> int:
@@ -60,7 +60,7 @@ class DynamixelPacketError(DynamixelError):
     def __init__(self, error_code: int, packet_handler: PacketHandler, action: str):
         self.__error_code = error_code
         super(DynamixelPacketError, self).__init__("Encountered packet error during {}: {}".format(
-            packet_handler.getRxPacketError(self.__error_code), action))
+            action, packet_handler.getRxPacketError(self.__error_code)))
 
     @property
     def error_code(self) -> int:
