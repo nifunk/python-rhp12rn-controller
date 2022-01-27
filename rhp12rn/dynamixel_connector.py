@@ -192,6 +192,7 @@ class DynamixelConnector:
             raise DynamixelCommunicationError(comm_result, self.__packet_handler, "reading")
         future = FieldReadFuture(field, self, self.__packet_handler, self.__port_handler)
         self.__future_queue.put(future)
+        self.process_futures()
         return future
 
     def write_field_async(self, field_name: str, value: int):
@@ -210,6 +211,7 @@ class DynamixelConnector:
             raise DynamixelCommunicationError(comm_result, self.__packet_handler, "writing")
         future = FieldWriteFuture(self, self.__packet_handler, self.__port_handler)
         self.__future_queue.put(future)
+        self.process_futures()
         return future
 
     def read_field(self, field_name: str):
