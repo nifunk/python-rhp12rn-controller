@@ -219,7 +219,7 @@ class DynamixelConnector:
         return self.write_field_async(field_name, value).result()
 
     def process_futures(self, stop_on: Optional[DynamixelFuture] = None):
-        while not self.__future_queue.empty():
+        while not self.__future_queue.empty() or stop_on is not None:
             future = self.__future_queue.get()
             future._read()
             if future == stop_on:
