@@ -25,10 +25,12 @@ SOFTWARE.
 import struct
 import time
 from abc import abstractmethod
-from queue import Queue
+from collections import deque
 from typing import Optional, NamedTuple, Dict, Sequence
 
 from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS, PKT_ID, PKT_ERROR
+
+from .custom_protocol2_packet_handler import CustomProtocol2PacketHandler
 
 Field = NamedTuple("Field", (
     ("address", int), ("data_type", str), ("name", str), ("desc", str), ("writable", bool),
@@ -68,13 +70,14 @@ class DynamixelPacketError(DynamixelError):
 
 
 class DynamixelFuture:
-    def __init__(self, connector: "DynamixelConnector", packet_handler: PacketHandler, port_handler: PortHandler):
+    def __init__(self, connector: "DynamixelConnector", packet_handler: CustomProtocol2PacketHandler,
+                 port_handler: PortHandler):
         self._connector = connector
         self._packet_handler = packet_handler
         self._port_handler = port_handler
 
     @abstractmethod
-    def _read(self):
+    def _read(self, blocking: bool):
         pass
 
     @abstractmethod
@@ -83,20 +86,25 @@ class DynamixelFuture:
 
 
 class FieldReadFuture(DynamixelFuture):
-    def __init__(self, field: Field, connector: "DynamixelConnector", packet_handler: PacketHandler,
+    def __init__(self, field: Field, connector: "DynamixelConnector", packet_handler: CustomProtocol2PacketHandler,
                  port_handler: PortHandler):
         super(FieldReadFuture, self).__init__(connector, packet_handler, port_handler)
         self.__field = field
         self.__data = self.__comm_result = self.__error = None
         self.__read = False
 
-    def _read(self):
-        self.__read = True
+    def _read(self, blocking: bool):
+        assert not self.__read
         self._port_handler.setPacketTimeoutMillis(100)
-        data_raw, self.__comm_result, self.__error = self._packet_handler.readRx(
-            self._port_handler, self._connector.dynamixel_id, struct.calcsize(self.__field.data_type))
-        if self.__comm_result == 0 and self.__error == 0:
-            self.__data = struct.unpack("<{}".format(self.__field.data_type), bytes(data_raw))[0]
+        try:
+            data_raw, self.__comm_result, self.__error = self._packet_handler.readRx(
+                self._port_handler, self._connector.dynamixel_id, struct.calcsize(self.__field.data_type), blocking)
+            if self.__comm_result == 0 and self.__error == 0:
+                self.__data = struct.unpack("<{}".format(self.__field.data_type), bytes(data_raw))[0]
+            self.__read = True
+        except BlockingIOError:
+            pass
+        return self.__read
 
     def result(self):
         if not self.__read:
@@ -114,19 +122,21 @@ class FieldWriteFuture(DynamixelFuture):
         self.__comm_result = self.__error = None
         self.__read = False
 
-    def _read(self):
-        self.__read = True
+    def _read(self, blocking: bool):
+        assert not self.__read
         self._port_handler.setPacketTimeoutMillis(100)
-        while True:
-            rxpacket, result = self._packet_handler.rxPacket(self._port_handler)
-            if result != COMM_SUCCESS or self._connector.dynamixel_id == rxpacket[PKT_ID]:
-                break
+        try:
+            while True:
+                rxpacket, result = self._packet_handler.rxPacket(self._port_handler, blocking=blocking)
+                if result != COMM_SUCCESS or self._connector.dynamixel_id == rxpacket[PKT_ID]:
+                    break
 
-        self.__comm_result = result
-        if result == COMM_SUCCESS:
-            self.__error = rxpacket[PKT_ERROR]
-        else:
-            self.__error = 0
+            self.__comm_result = result
+            self.__error = rxpacket[PKT_ERROR] if result == COMM_SUCCESS else 0
+            self.__read = True
+        except BlockingIOError:
+            pass
+        return self.__read
 
     def result(self):
         if not self.__read:
@@ -144,9 +154,9 @@ class DynamixelConnector:
         self.__dynamixel_id = dynamixel_id
         self.__device = device
         self.__port_handler: Optional[PortHandler] = None
-        self.__packet_handler = PacketHandler(2.0)
+        self.__packet_handler = CustomProtocol2PacketHandler()
         self.__field_dict = {f.name: f for f in fields}
-        self.__future_queue = Queue()
+        self.__future_queue = deque()
         self.__last_tx = 0
         self.__tx_wait_time = 0.001
 
@@ -191,8 +201,8 @@ class DynamixelConnector:
         if comm_result != 0:
             raise DynamixelCommunicationError(comm_result, self.__packet_handler, "reading")
         future = FieldReadFuture(field, self, self.__packet_handler, self.__port_handler)
-        self.__future_queue.put(future)
-        self.process_futures()
+        self.__future_queue.append(future)
+        self.process_futures(blocking=False)
         return future
 
     def write_field_async(self, field_name: str, value: int):
@@ -210,8 +220,8 @@ class DynamixelConnector:
         if comm_result != 0:
             raise DynamixelCommunicationError(comm_result, self.__packet_handler, "writing")
         future = FieldWriteFuture(self, self.__packet_handler, self.__port_handler)
-        self.__future_queue.put(future)
-        self.process_futures()
+        self.__future_queue.append(future)
+        self.process_futures(blocking=False)
         return future
 
     def read_field(self, field_name: str):
@@ -220,10 +230,13 @@ class DynamixelConnector:
     def write_field(self, field_name: str, value: int):
         return self.write_field_async(field_name, value).result()
 
-    def process_futures(self, stop_on: Optional[DynamixelFuture] = None):
-        while not self.__future_queue.empty() or stop_on is not None:
-            future = self.__future_queue.get()
-            future._read()
+    def process_futures(self, stop_on: Optional[DynamixelFuture] = None, blocking: bool = True):
+        while len(self.__future_queue) > 0:
+            future = self.__future_queue[0]
+            if future._read(blocking):
+                self.__future_queue.popleft()
+            else:
+                break
             if future == stop_on:
                 break
 
