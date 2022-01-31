@@ -24,7 +24,7 @@ SOFTWARE.
 
 from typing import Sequence, Tuple, List
 
-from .dynamixel_connector import DynamixelConnector, Field, DynamixelConnectionError
+from .dynamixel_connector import DynamixelConnector, Field, DynamixelConnectionError, DynamixelCommunicationError
 
 
 def find_grippers(device: str = "/dev/ttyUSB0",
@@ -48,6 +48,6 @@ def find_grippers(device: str = "/dev/ttyUSB0",
                         model_name = "RH-P12-RN" if model_number == 35073 else "RH-P12-RN(A)"
                         found_devices.append((model_name, r, i))
                         print("Found {} with ID {} at baud rate {}".format(model_name, i, r))
-            except DynamixelConnectionError:
+            except DynamixelCommunicationError:
                 pass
     return found_devices
