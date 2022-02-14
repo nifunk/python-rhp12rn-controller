@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="rhp12rn",
-    version="0.1.0",
+    version="1.0.0",
     description="Python controller for the ROBOTIS RH-P12-RN and RH-P12-RN(A) grippers.",
     url="https://github.com/TimSchneider42/python-rhp12rn-controller",
     author="Tim Schneider",
@@ -14,9 +14,8 @@ setup(
         ],
 
     classifiers=[
-        "Development Status :: 1 - Planning",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: BSD License",
+        "License :: OSI Approved :: MIT License",
         "Operating System :: POSIX :: Linux",
         "Programming Language :: Python :: 3.6",
     ],
