@@ -148,3 +148,27 @@ class RHP12RN:
     @goal_acceleration_rel.setter
     def goal_acceleration_rel(self, value: float):
         self.goal_acceleration = int(round(self.__to_abs(value, -self.acceleration_limit, self.acceleration_limit)))
+
+    @property
+    def position_p_gain(self):
+        return self.__read("position_p_gain")
+
+    @position_p_gain.setter
+    def position_p_gain(self, value: int):
+        self.__write("position_p_gain", value)
+
+    @property
+    def position_d_gain(self):
+        return self.__read("position_d_gain")
+
+    @position_d_gain.setter
+    def position_d_gain(self, value: int):
+        self.__write("position_d_gain", value)
+
+    @property
+    def position_i_gain(self):
+        return self.__read("position_i_gain")
+
+    @position_i_gain.setter
+    def position_i_gain(self, value: int):
+        self.__write("position_i_gain", value)

@@ -158,7 +158,7 @@ class DynamixelConnector:
         self.__field_dict = {f.name: f for f in fields}
         self.__future_queue = deque()
         self.__last_tx = 0
-        self.__tx_wait_time = 0.001
+        self.__tx_wait_time = 0.0001
 
     def connect(self):
         if not self.connected:
