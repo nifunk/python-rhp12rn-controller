@@ -1,0 +1,1 @@
+dynamixel-sdk@ git+https://github.com/ROBOTIS-GIT/DynamixelSDK.git@c7e1eb71c911b87f7bdeda3c2c9e92276c2b4627#egg=dynamixel-sdk&subdirectory=python

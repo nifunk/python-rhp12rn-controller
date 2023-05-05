@@ -35,6 +35,9 @@ class RHP12RN:
     def __read(self, field_name: str):
         return self.__connector.read_field(field_name)
 
+    def __group_read(self):
+        return self.__connector.group_read()
+
     def __write(self, field_name: str, value: Any):
         self.__connector.write_field(field_name, int(value))
 
@@ -87,6 +90,14 @@ class RHP12RN:
     @property
     def current_position(self):
         return self.__read("present_position")
+
+    @property
+    def baud_rate(self):
+        return self.__read("baud_rate")
+
+    @property
+    def realtime_tick(self):
+        return self.__read("realtime_tick")
 
     @property
     def current_position_rel(self):
@@ -172,3 +183,7 @@ class RHP12RN:
     @position_i_gain.setter
     def position_i_gain(self, value: int):
         self.__write("position_i_gain", value)
+
+    @property
+    def read_gripper_status(self):
+        return self.__group_read()

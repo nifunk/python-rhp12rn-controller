@@ -9,6 +9,15 @@ This package can be installed via pip:
 pip install git+https://github.com/TimSchneider42/python-rhp12rn-controller.git
 ```
 
+## Latency
+
+Since Ubuntu 16.04 (Xenial Xerus), the kernel's USB serial driver has a default latency of 16ms. 
+This can be reduced to 1ms by executing the following command:
+
+```bash
+./scripts/reduce_latency.sh
+```
+
 ## Usage
 
 First, create a `RHP12RNConnector` or `RHP12RNAConnector` instance depending on your gripper model and call the `connect()` function to establish a serial connection to the gripper:

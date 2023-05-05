@@ -28,7 +28,7 @@ from abc import abstractmethod
 from collections import deque
 from typing import Optional, NamedTuple, Dict, Sequence
 
-from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS, PKT_ID, PKT_ERROR
+from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS, PKT_ID, PKT_ERROR, GroupSyncRead
 
 from .custom_protocol2_packet_handler import CustomProtocol2PacketHandler
 
@@ -159,6 +159,7 @@ class DynamixelConnector:
         self.__future_queue = deque()
         self.__last_tx = 0
         self.__tx_wait_time = 0.0001
+        self.__checked_gripper_type = False
 
     def connect(self):
         if not self.connected:
@@ -225,10 +226,66 @@ class DynamixelConnector:
         return future
 
     def read_field(self, field_name: str):
-        return self.read_field_async(field_name).result()
+        # call to read one field via this function takes roughly 1ms if kernel's USB serial driver latency is set to 1ms (see README)
+        # alternatively consider using group_read (can return multiple fields in one packet call)
+        value = self.read_field_async(field_name)
+        ret_val = value.result()
+        return ret_val
 
     def write_field(self, field_name: str, value: int):
+        # call to via this function takes roughly 1ms if kernel's USB serial driver latency is set to 1ms (see README)
         return self.write_field_async(field_name, value).result()
+
+    def group_read(self):
+        '''
+        Reads multiple values from the gripper. The values are read in a single packet call. This is significantly more
+        efficient than calling read_field multiple times.
+        At the moment only supported for RHP12RNAConnector.
+        '''
+
+        # on first call, check whether the gripper type is supported
+        if not self.__checked_gripper_type:
+            self.__checked_gripper_type = True
+            from rhp12rn import RHP12RNAConnector
+            if not(isinstance(self, RHP12RNAConnector)):
+                raise DynamixelError("Only RHP12RNAConnector is supported for current implementation of group_read, because"
+                                     "of hard coded packet position values.")
+            # if check is passed generate the objects
+            self.__groupSyncRead = GroupSyncRead(self.__port_handler, self.__packet_handler, 568, 16)
+            dxl_addparam_result = self.__groupSyncRead.addParam(self.__dynamixel_id)
+            if dxl_addparam_result != True:
+                raise DynamixelError("[ID:%03d] groupSyncRead addparam failed" % self.__dynamixel_id)
+
+        # Syncread present position
+        dxl_comm_result = self.__groupSyncRead.txRxPacket()
+        if dxl_comm_result != COMM_SUCCESS:
+            raise DynamixelError("%s" % packetHandler.getTxRxResult(dxl_comm_result))
+
+        # Check if groupsyncread data of Dynamixel#1 is available
+        dxl_getdata_result = self.__groupSyncRead.isAvailable(self.__dynamixel_id, 568, 16)
+        if dxl_getdata_result != True:
+            raise DynamixelError("[ID:%03d] groupSyncRead getdata failed" % self.__dynamixel_id)
+
+        # Decode the message
+        real_time_tick = self.__groupSyncRead.getData(self.__dynamixel_id, 568, 2)
+        moving = self.__groupSyncRead.getData(self.__dynamixel_id, 570, 1)
+        moving_status = self.__groupSyncRead.getData(self.__dynamixel_id, 571, 1)
+        present_pwm = self.__groupSyncRead.getData(self.__dynamixel_id, 572, 2)
+        present_current = self.__groupSyncRead.getData(self.__dynamixel_id, 574, 2)
+        dxl_present_velocity = self.__groupSyncRead.getData(self.__dynamixel_id, 576, 4)
+        present_position = self.__groupSyncRead.getData(self.__dynamixel_id, 580, 4)
+        # convert current to signed int cf. https://github.com/ROBOTIS-GIT/DynamixelSDK/issues/264
+        if present_current > 0x7fff:
+            present_current = present_current - 65536
+
+        if dxl_present_velocity > 0x7fffffff:
+            dxl_present_velocity = dxl_present_velocity - 4294967296
+
+        # Return the values as a dictionary
+        return dict({'real_time_tick': real_time_tick, 'moving': moving, 'present_current': present_current,
+                     'moving_status': moving_status, 'present_pwm': present_pwm, 'present_velocity': dxl_present_velocity,
+                     'present_position': present_position})
+
 
     def process_futures(self, stop_on: Optional[DynamixelFuture] = None, blocking: bool = True):
         while len(self.__future_queue) > 0:
