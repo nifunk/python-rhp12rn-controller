@@ -103,6 +103,9 @@ class RHP12RN:
     def current_position_rel(self):
         return self.__to_rel(self.current_position, self.position_limit_low, self.position_limit_high)
 
+    def abs_to_rel_pos(self, absolute_position):
+        return self.__to_rel(absolute_position, self.position_limit_low, self.position_limit_high)
+
     @property
     def current_velocity(self):
         return self.__read("present_position")
@@ -119,6 +122,14 @@ class RHP12RN:
     @goal_position.setter
     def goal_position(self, value: int):
         self.__write("goal_position", value)
+
+    @property
+    def goal_current(self):
+        return self.__read("goal_current")
+
+    @goal_current.setter
+    def goal_current(self, value: int):
+        self.__write("goal_current", value)
 
     @property
     def goal_position_rel(self):
@@ -187,3 +198,12 @@ class RHP12RN:
     @property
     def read_gripper_status(self):
         return self.__group_read()
+
+    def enable_position_control(self):
+        self.__write("operating_mode", 5)
+        print ("Position control enabled")
+
+    def enable_current_control(self):
+        self.__write("operating_mode", 0)
+        print ("Current control enabled")
+

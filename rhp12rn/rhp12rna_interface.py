@@ -29,29 +29,99 @@ from rhp12rn import RHP12RN, RHP12RNAConnector
 
 class RHP12RNAInterface:
     # Initialise the gripper
-    def __init__(self):
+    def __init__(self, mode='position'):
         # Connect to the gripper - in our setup, the baudrate is 2M
         self.connector = RHP12RNAConnector(device="/dev/ttyUSB0", baud_rate=2000000, dynamixel_id=1)
         self.connector.connect()
         self.gripper = RHP12RN(self.connector)
 
-        # Standard gripper setup
+        # Standard gripper setup - must be done when torque is disabled
         self.gripper.torque_enabled = False
         self.gripper.position_limit_high = 660
         self.pos_limit_high = self.gripper.position_limit_high
         self.pos_limit_low = self.gripper.position_limit_low
 
+        # determine operating mode
+        self.mode = mode
+        if self.mode == 'position':
+            self.position_control_setup()
+        elif self.mode == 'current':
+            self.current_control_setup()
+        else:
+            raise Exception("Mode not recognised. Please choose position or current.")
+
+
         self.gripper.torque_enabled = True
         print("Enabled motor.")
 
+    def position_control_setup(self, gain=50):
+        self.gripper.enable_position_control()
         # Set P gain - note the original value was 193
-        self.gripper.position_p_gain = 50
+        self.gripper.position_p_gain = gain
+
+    def current_control_setup(self):
+        self.gripper.enable_current_control()
+        self.gripper.goal_current = 0
 
     def open(self):
         self.gripper.goal_position_rel = 0.0
         while self.gripper.current_position_rel > 0.05:
             time.sleep(0.01)
         print("Gripper fully opened.")
+
+    def open_constant_current(self):
+        while self.gripper.current_position_rel > 0.05:
+            self.constant_current(-50)
+            time.sleep(0.01)
+        # brings the gripper to a stop
+        self.constant_current(0)
+        print("Gripper fully opened.")
+
+    def close_constant_current_until_stop(self,final_current=0):
+        # final current basically specifies the behavior after. If set to 0, the gripper will just stop
+        # eventually you want to set it higher to achieve a certain force
+
+        # function terminates when current position and position 100 timesteps ago are the same
+        curr_pos_arr = -1 * np.ones(100)
+        const_closing_current = 10
+
+        while True:
+            read_res = self.read_status()
+            curr_pos = read_res['present_position']
+            curr_pos_rel = self.gripper.abs_to_rel_pos(curr_pos)
+            if (curr_pos_rel<0.01):
+                # this means gripper is fully closed -> raise an error
+                self.constant_current(0)
+                raise Exception("Close constant current until stop function failed. Gripper is fully closed.")
+                break
+            else:
+                self.constant_current(const_closing_current)
+
+            curr_pos_arr = np.roll(curr_pos_arr, 1)
+            curr_pos_arr[0] = curr_pos
+            if curr_pos_arr[0] == curr_pos_arr[99]:
+                print ("Position not changing any longer - end close gripper function.")
+                break
+
+        # now linearily increase the closing current to the final current if it is not 0
+        if final_current != 0:
+            current_current = const_closing_current
+            while current_current < final_current:
+                # increment in steps of 10 mA
+                current_current = min(current_current + 10, final_current)
+                self.constant_current(final_current)
+        else:
+            self.constant_current(0)
+
+    def constant_current(self, value=0):
+        # set the current to a constant value in mA - negative is opening, positive is closing, remember to convert before
+        self.gripper.goal_current = self.convert_current(value)
+
+    def convert_current(self, value):
+        # conversion is needed as the field assumes unsigned value!
+        if value < 0:
+            value = 65536 + value
+        return value
 
     def read_status(self):
         return self.gripper.read_gripper_status

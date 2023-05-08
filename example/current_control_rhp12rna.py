@@ -31,12 +31,15 @@ def make_manoeuvre(gripper_handle):
     '''
     This function actually defines the manoeuvre to be performed.
     '''
-    gripper_handle.open()
+    gripper_handle.open_constant_current()
     input ("Press enter to close gripper")
-    gripper_handle.close_w_const_velocity(10)
+    gripper_handle.close_constant_current_until_stop(final_current=0)
+    # gripper_handle.close_constant_current_until_stop(final_current=100)
+    print ("Gripper closed")
+    time.sleep(2)
 
 def main():
-    robotis_gripper_handle = RHP12RNAInterface(mode="position")
+    robotis_gripper_handle = RHP12RNAInterface(mode="current")
     try:
         make_manoeuvre(robotis_gripper_handle)
     finally:
